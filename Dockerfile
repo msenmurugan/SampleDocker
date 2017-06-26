@@ -2,7 +2,7 @@
 
 FROM centos:centos7
 
-MAINTAINER Chris Birchall (chris.birchall@gmail.com)
+MAINTAINER Senthil (msenmurugan@gmail.com)
 
 # Java installation.
 #
