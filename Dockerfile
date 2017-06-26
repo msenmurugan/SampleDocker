@@ -1,63 +1,48 @@
-# Sample Dockerfile for a Java webapp running on Tomcat + Apache
-
-FROM centos:centos7
-
-MAINTAINER Senthil (msenmurugan@gmail.com)
-
-# Java installation.
 #
-# You have to either start with an image that has Java 7 pre-installed, 
-# or manually download Java once, host it somewhere, and wget it.
-# RUN wget -O /tmp/jdk-8u20-linux-x64.rpm http://foo/jdk-8u20-linux-x64.rpm
-ADD ./jdk /tmp
-RUN rpm -i /tmp/jdk-8u20-linux-x64.rpm
-RUN rm /tmp/jdk-8u20-linux-x64.rpm
-
-# Other stuff can be installed with yum
-# (Note that git is quite old. If you want 1.8.x, install from source.)
-ADD ./etc/nginx.repo /etc/yum/repos.d/nginx.repo
-RUN yum -y --noplugins --verbose update
-RUN yum -y --noplugins --verbose install nginx git wget tar
-
-# Tomcat 7
+# example Dockerfile for https://docs.docker.com/examples/postgresql_service/
 #
-# Not available on yum, so install manually
-RUN wget -O /tmp/apache-tomcat-7.0.55.tar.gz http://ftp.meisei-u.ac.jp/mirror/apache/dist/tomcat/tomcat-7/v7.0.55/bin/apache-tomcat-7.0.55.tar.gz
-RUN cd /usr/local && tar xzf /tmp/apache-tomcat-7.0.55.tar.gz
-RUN ln -s /usr/local/apache-tomcat-7.0.55 /usr/local/tomcat
-RUN rm /tmp/apache-tomcat-7.0.55.tar.gz
 
-# Download Maven
-RUN wget -O /tmp/apache-maven-3.1.1-bin.tar.gz http://ftp.jaist.ac.jp/pub/apache/maven/maven-3/3.1.1/binaries/apache-maven-3.1.1-bin.tar.gz
-RUN cd /usr/local && tar xzf /tmp/apache-maven-3.1.1-bin.tar.gz
-RUN ln -s /usr/local/apache-maven-3.1.1 /usr/local/maven
-RUN rm /tmp/apache-maven-3.1.1-bin.tar.gz
+FROM ubuntu
 
-# Copy nginx config file and delete conflicting conf
-ADD ./nginx-conf /etc/nginx/conf.d
-RUN rm -f /etc/nginx/conf.d/default.conf
+# Add the PostgreSQL PGP key to verify their Debian packages.
+# It should be the same key as https://www.postgresql.org/media/keys/ACCC4CF8.asc
+RUN apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
 
-# Copy start script
-ADD ./start-script /usr/local
-RUN chmod a+x /usr/local/start-everything.sh
+# Add PostgreSQL's repository. It contains the most recent stable release
+#     of PostgreSQL, ``9.3``.
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" > /etc/apt/sources.list.d/pgdg.list
 
-# Clone the application itself
-RUN cd /usr/local && git clone https://github.com/cb372/ninja-sample.git
+# Install ``python-software-properties``, ``software-properties-common`` and PostgreSQL 9.3
+#  There are some warnings (in red) that show up during the build. You can hide
+#  them by prefixing each apt-get statement with DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y python-software-properties software-properties-common postgresql-9.3 postgresql-client-9.3 postgresql-contrib-9.3
 
-# Environment variables
-ENV JAVA_HOME /usr/java/latest
-ENV CATALINA_HOME /usr/local/tomcat
-ENV MAVEN_HOME /usr/local/maven
-ENV APP_HOME /usr/local/ninja-sample
+# Note: The official Debian and Ubuntu images automatically ``apt-get clean``
+# after each ``apt-get``
 
-# Build the app once, so we can include all the dependencies in the image
-RUN cd /usr/local/ninja-sample && /usr/local/maven/bin/mvn -Dmaven.test.skip=true package
+# Run the rest of the commands as the ``postgres`` user created by the ``postgres-9.3`` package when it was ``apt-get installed``
+USER postgres
 
-# Set the start script as the default command (this will be overriden if a command is passed to Docker on the commandline).
-# Note that we tail Tomcat's log in order to keep the process running
-# so that Docker will not shutdown the container. This is a bit of a hack.
-CMD /usr/local/start-everything.sh && tail -F /usr/local/tomcat/logs/catalina.out
+# Create a PostgreSQL role named ``docker`` with ``docker`` as the password and
+# then create a database `docker` owned by the ``docker`` role.
+# Note: here we use ``&&\`` to run commands one after the other - the ``\``
+#       allows the RUN command to span multiple lines.
+RUN    /etc/init.d/postgresql start &&\
+    psql --command "CREATE USER docker WITH SUPERUSER PASSWORD 'docker';" &&\
+    createdb -O docker docker
 
-# Forward HTTP ports
-EXPOSE 80 8080
+# Adjust PostgreSQL configuration so that remote connections to the
+# database are possible.
+RUN echo "host all  all    0.0.0.0/0  md5" >> /etc/postgresql/9.3/main/pg_hba.conf
 
+# And add ``listen_addresses`` to ``/etc/postgresql/9.3/main/postgresql.conf``
+RUN echo "listen_addresses='*'" >> /etc/postgresql/9.3/main/postgresql.conf
+
+# Expose the PostgreSQL port
+EXPOSE 5432
+
+# Add VOLUMEs to allow backup of config, logs and databases
+VOLUME  ["/etc/postgresql", "/var/log/postgresql", "/var/lib/postgresql"]
+
+# Set the default command to run when starting the container
+CMD ["/usr/lib/postgresql/9.3/bin/postgres", "-D", "/var/lib/postgresql/9.3/main", "-c", "config_file=/etc/postgresql/9.3/main/postgresql.conf"]
